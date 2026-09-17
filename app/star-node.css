@@ -1,0 +1,19 @@
+.knowledge-node.shape-star > .node-kicker,
+.knowledge-node.shape-star > .node-image,
+.knowledge-node.shape-star > .stored-strokes,
+.knowledge-node.shape-star > footer,
+.knowledge-node.shape-star > .node-tools,
+.knowledge-node.shape-star > .shape-picker,
+.knowledge-node.shape-star > .self-grade {
+  position: absolute;
+}
+
+.knowledge-node.shape-star {
+  min-width: 220px;
+  padding-inline: 26px;
+}
+
+.knowledge-node.shape-star textarea {
+  font-size: 11px;
+  line-height: 1.5;
+}

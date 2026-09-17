@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./star-node.css";
 
 export const metadata: Metadata = {
   title: "SynapseQuest — Bionic Recall Engine",
