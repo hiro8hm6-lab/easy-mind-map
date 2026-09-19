@@ -1,4 +1,4 @@
-const CACHE = "synapsequest-shell-v2";
+const CACHE = "synapsequest-shell-v3";
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(["/", "/favicon.svg"])).then(() => self.skipWaiting()));
 });
