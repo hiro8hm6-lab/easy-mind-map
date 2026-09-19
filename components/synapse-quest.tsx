@@ -63,11 +63,17 @@ export function SynapseQuest() {
   const [recallRoot, setRecallRoot] = useState<string>(), [enabledBranches, setEnabledBranches] = useState<Set<string>>(new Set());
   const [answers, setAnswers] = useState<Record<string, string>>({}), [revealed, setRevealed] = useState<Set<string>>(new Set());
   const [drawAnswers, setDrawAnswers] = useState<Record<string, Stroke[]>>({}), [penNodeId, setPenNodeId] = useState<string>(), [drawingStroke, setDrawingStroke] = useState<Stroke>();
-  const [mobileIndex, setMobileIndex] = useState(0), [message, setMessage] = useState("準備中…");
+  const [mobileIndex, setMobileIndex] = useState(0), [message, setMessage] = useState("準備完了 — ノードを選択して整理できます"), [isAttaching, setIsAttaching] = useState(false);
   const dragRef = useRef<{ id: string; offsetX: number; offsetY: number } | undefined>(undefined), panRef = useRef<{ x: number; y: number; startX: number; startY: number } | undefined>(undefined);
   const canvasRef = useRef<HTMLDivElement>(null), nodeMap = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
 
-  useEffect(() => { seedDemo().catch(() => setMessage("デモデータを保存できませんでした")); }, []);
+  useEffect(() => {
+    let active = true;
+    seedDemo()
+      .then(() => { if (active) setMessage("準備完了 — ノードを選択して整理できます"); })
+      .catch(() => { if (active) setMessage("デモデータを保存できませんでした"); });
+    return () => { active = false; };
+  }, []);
   useEffect(() => {
     const undersized = nodes.filter((node) => node.shape === "star" && (node.width < STAR_MIN_WIDTH || node.height < STAR_MIN_HEIGHT));
     if (!undersized.length) return;
@@ -97,15 +103,26 @@ export function SynapseQuest() {
 
   const recalculateDepths = useCallback(async (rootId: string) => {
     const root = await db.nodes.get(rootId); if (!root) return; const edges = await db.connections.where("topicId").equals(root.topicId).toArray();
+    const visited = new Set([rootId]);
     let frontier = [rootId], depth = root.depth + 1;
-    while (frontier.length) { const ids = edges.filter((edge) => !edge.isCrossLink && frontier.includes(edge.sourceId)).map((edge) => edge.targetId); await Promise.all(ids.map((id) => db.nodes.update(id, { depth, updatedAt: Date.now() }))); frontier = ids; depth++; }
+    while (frontier.length) {
+      const ids = edges
+        .filter((edge) => edge.active && !edge.isCrossLink && frontier.includes(edge.sourceId) && !visited.has(edge.targetId))
+        .map((edge) => edge.targetId);
+      if (!ids.length) break;
+      ids.forEach((id) => visited.add(id));
+      await Promise.all(ids.map((id) => db.nodes.update(id, { depth, updatedAt: Date.now() })));
+      frontier = ids;
+      depth++;
+    }
   }, []);
   const reparent = useCallback(async (nodeId: string, parentId: string) => {
     const node = nodeMap.get(nodeId), parent = nodeMap.get(parentId);
-    if (!node || !parent || wouldCreateCycle(nodeId, parentId, connections)) { toast.error("子孫ノードには接続できません"); return; }
+    if (!node || !parent || wouldCreateCycle(nodeId, parentId, connections)) { toast.error("子孫ノードには接続できません"); return false; }
     const old = connections.find((edge) => !edge.isCrossLink && edge.targetId === nodeId);
     await db.transaction("rw", db.nodes, db.connections, db.topics, async () => { if (old) await db.connections.delete(old.id); await db.connections.add({ id: crypto.randomUUID(), topicId: node.topicId, sourceId: parentId, targetId: nodeId, relation: "definition", isCrossLink: false, active: true }); await db.nodes.update(nodeId, { parentId, depth: parent.depth + 1, isStagedInMothership: true, updatedAt: Date.now() }); await db.topics.update(node.topicId, { lastActiveParentId: parentId, updatedAt: Date.now() }); });
     await recalculateDepths(nodeId);
+    return true;
   }, [connections, nodeMap, recalculateDepths]);
 
   const autoCleanup = useCallback(async () => {
@@ -145,7 +162,25 @@ export function SynapseQuest() {
     await db.nodes.update(id, { shape, x: node.x - (width - node.width) / 2, y: node.y - (height - node.height) / 2, width, height, updatedAt: Date.now() });
     setShapePickerId(undefined);
   };
-  const attachTray = async (parentId?: string, ids = traySelected) => { const target = parentId ?? topic?.lastActiveParentId; if (!target || !ids.size) { toast.info("Trayのノードを選択してください"); return; } for (const id of ids) await reparent(id, target); setTraySelected(new Set()); toast.success(`${ids.size}件を接続しました`); };
+  const attachTray = async (parentId?: string, ids = traySelected) => {
+    const target = parentId ?? topic?.lastActiveParentId;
+    if (!target || !ids.size || isAttaching) { if (!isAttaching) toast.info("Trayのノードを選択してください"); return; }
+    const selectedIds = Array.from(ids);
+    setIsAttaching(true);
+    setMessage(`${selectedIds.length}件を接続中…`);
+    try {
+      let attached = 0;
+      for (const id of selectedIds) if (await reparent(id, target)) attached++;
+      setTraySelected(new Set());
+      setMessage(`${attached}件を接続しました`);
+      toast.success(`${attached}件を接続しました`);
+    } catch {
+      setMessage("接続に失敗しました — もう一度お試しください");
+      toast.error("ノードを接続できませんでした");
+    } finally {
+      setIsAttaching(false);
+    }
+  };
   const gradeNode = async (node: KnowledgeNode, manual?: Grade) => { const score = manual ? undefined : similarity(answers[node.id] ?? "", node.text), grade = manual ?? gradeForSimilarity(score ?? 0), schedule = nextReview(grade, node.reviewBox); await db.transaction("rw", db.nodes, db.attempts, async () => { await db.attempts.add({ id: crypto.randomUUID(), topicId: node.topicId, nodeId: node.id, answer: answers[node.id] ?? "[drawing]", similarity: score, grade, createdAt: Date.now() }); await db.nodes.update(node.id, { ...schedule, redFlag: grade !== "correct", updatedAt: Date.now() }); }); setRevealed((current) => new Set(current).add(node.id)); setMessage(grade === "correct" ? "定着しました — 次の想起へ" : grade === "partial" ? "惜しい。明日もう一度" : "弱点として優先キューへ追加しました"); };
 
   const pointerToStroke = (event: React.PointerEvent<SVGSVGElement>) => { const rect = event.currentTarget.getBoundingClientRect(); return { x: ((event.clientX - rect.left) / rect.width) * 200, y: ((event.clientY - rect.top) / rect.height) * 100, pressure: event.pressure || .5 }; };

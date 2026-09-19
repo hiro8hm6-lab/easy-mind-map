@@ -7,13 +7,19 @@ export function structuralConnections(connections: Connection[]) {
 export function descendants(rootId: string, connections: Connection[], maxDepth = 3, enabledRoots?: Set<string>) {
   const edges = structuralConnections(connections);
   const found = new Set<string>();
+  const visited = new Set([rootId]);
   let frontier = [rootId];
   for (let depth = 0; depth < maxDepth; depth++) {
+    if (!frontier.length) break;
     const next: string[] = [];
     for (const source of frontier) {
       for (const edge of edges.filter((candidate) => candidate.sourceId === source)) {
         if (depth === 0 && enabledRoots && !enabledRoots.has(edge.targetId)) continue;
-        if (!found.has(edge.targetId)) { found.add(edge.targetId); next.push(edge.targetId); }
+        if (!visited.has(edge.targetId)) {
+          visited.add(edge.targetId);
+          found.add(edge.targetId);
+          next.push(edge.targetId);
+        }
       }
     }
     frontier = next;
@@ -76,4 +82,3 @@ export function recallPriority(node: KnowledgeNode, attempts: RecallAttempt[]) {
   const stats = nodeStats(node.id, attempts);
   return (node.nextReviewAt <= Date.now() ? 1_000_000 : 0) + (node.redFlag ? 100_000 : 0) + (100 - stats.rate) * 100 - node.updatedAt / 1e12;
 }
-
